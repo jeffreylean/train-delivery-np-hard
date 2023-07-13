@@ -98,7 +98,7 @@ func Initialize(path string) (map[string]*types.Train, map[string]*types.Package
 		if err != nil {
 			panic(fmt.Sprintln("Error reading train capacity:", err))
 		}
-		train[trainInfo[0]] = &types.Train{Capacity: capacity, StartAt: trainInfo[2], CurrentLocation: trainInfo[2], Name: trainInfo[0], CurrentCapacity: capacity, PickedPackage: make(map[int][]string), DroppedPackage: make(map[int][]string)}
+		train[trainInfo[0]] = &types.Train{Capacity: capacity, StartAt: trainInfo[2], CurrentLocation: trainInfo[2], Name: trainInfo[0], CurrentCapacity: capacity, PickedPackage: make([]string, 0), DroppedPackage: make([]string, 0)}
 	}
 	return train, pkg, graph
 }

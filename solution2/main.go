@@ -5,17 +5,17 @@ import (
 	"fmt"
 	"math"
 	"math/rand"
+	"solution2/anneal"
 	"solution2/loader"
 	"solution2/pqueue"
 	"solution2/types"
 	"sort"
-
-	"github.com/ccssmnn/hego"
 )
 
 type State struct {
 	TrainAssignment map[string][]string
 	TrainPickedUp   map[string][]string
+	Move            []Move
 	Route           map[string][]string
 	Graph           types.Graph
 	Train           map[string]*types.Train
@@ -23,7 +23,7 @@ type State struct {
 }
 
 type Move struct {
-	TimeTaken      float64
+	TimeTaken      int
 	Train          string
 	StartNode      string
 	EndNode        string
@@ -34,43 +34,12 @@ type Move struct {
 func main() {
 	train, pkg, graph := loader.Initialize("example.txt")
 	t := assignPkgToTrain(graph, train, pkg)
-	r := planRoute(graph, t, train, pkg)
+	r, m := planRoute(graph, t, train, pkg)
 
-	initialState := State{TrainAssignment: t, Route: r, Graph: graph, Train: train, Package: pkg}
+	initialState := State{TrainAssignment: t, Route: r, Move: m, Graph: graph, Train: train, Package: pkg}
 
-	settings := hego.SASettings{}
-	settings.MaxIterations = 10000
-	settings.Verbose = 10000
-	settings.Temperature = 10000
-	settings.AnnealingFactor = 0.99
-
-	result, err := hego.SA(initialState, settings)
-	if err != nil {
-		panic(fmt.Sprintf("Error while running Anneal: %v", err))
-	}
-
-	finalEnergy := result.Energy
-	s := result.State.(State)
-
-	for trainName := range s.Train {
-		route := s.Route[trainName]
-		fmt.Println("Train assignment:", s.TrainAssignment[trainName])
-		fmt.Printf("Train %s route: %v\n\n", trainName, route)
-		//for i := 0; i < len(route)-1; i++ {
-		//	move := Move{
-		//		TimeTaken:      timeTaken,
-		//		Train:          train.Name,
-		//		StartNode:      route[i],
-		//		EndNode:        route[i+1],
-		//		PickedPackage:  train.PickedPackage[i],
-		//		DroppedPackage: train.DroppedPackage[i+1],
-		//	}
-		//	timeTaken += float64(s.Graph[route[i]][route[i+1]])
-
-		//	fmt.Printf("W=%d, T=%s, N1=%s, P1=%v, N2=%s P2=%v\n", int(move.TimeTaken), move.Train, move.StartNode, move.PickedPackage, move.EndNode, move.DroppedPackage)
-		//}
-	}
-	fmt.Printf("Complete simulation in %v ! Minimum time taken to delivery all package: %v", result.Runtime, finalEnergy)
+	s := anneal.Init(initialState, anneal.Config{Iteration: 10000, Temperature: 25000, AneallingFactor: 0.99})
+	s.PrintMovement()
 }
 
 func (s State) Energy() float64 {
@@ -85,7 +54,14 @@ func (s State) Energy() float64 {
 	return timeTaken
 }
 
-func (s State) Neighbor() hego.AnnealingState {
+func (s State) PrintMovement() {
+	for _, each := range s.Move {
+		fmt.Printf("W=%d, T=%s, N1=%s, P1=%v, N2=%s P2=%v\n", each.TimeTaken, each.Train, each.StartNode, each.PickedPackage, each.EndNode, each.DroppedPackage)
+	}
+	fmt.Printf("// Takes %d mintues total.", int(s.Energy()))
+}
+
+func (s State) Neighbor() anneal.State {
 	newState := s
 	// Generate 2 random train
 	train1 := s.getRandomTrain()
@@ -105,11 +81,13 @@ func (s State) Neighbor() hego.AnnealingState {
 			// reset the package to not picked up
 			newState.reset()
 
-			route := planRoute(newState.Graph, newState.TrainAssignment, newState.Train, newState.Package)
+			route, move := planRoute(newState.Graph, newState.TrainAssignment, newState.Train, newState.Package)
 			newState.Route = route
+			newState.Move = move
 		}
 
 	} else {
+		// Swap package within a train and regenerate new route for the train
 		if len(newState.TrainAssignment[train1]) > 0 {
 			i := rand.Intn(len(newState.TrainAssignment[train1]))
 			j := rand.Intn(len(newState.TrainAssignment[train1]))
@@ -119,13 +97,15 @@ func (s State) Neighbor() hego.AnnealingState {
 			// Reset
 			newState.reset()
 
-			route := planRoute(newState.Graph, newState.TrainAssignment, newState.Train, newState.Package)
+			route, move := planRoute(newState.Graph, newState.TrainAssignment, newState.Train, newState.Package)
 			newState.Route = route
+			newState.Move = move
 		}
 	}
 	return newState
 }
 
+// Get random train
 func (s State) getRandomTrain() string {
 	trainName := make([]string, 0, len(s.Train))
 	for n := range s.Train {
@@ -135,6 +115,19 @@ func (s State) getRandomTrain() string {
 	return tName
 }
 
+// Reset some state, typically every iteration
+func (s State) reset() {
+	for _, each := range s.Package {
+		each.Picked = false
+	}
+	for _, each := range s.Train {
+		each.CurrentLocation = each.StartAt
+		each.PickedPackage = make([]string, 0)
+		each.DroppedPackage = make([]string, 0)
+	}
+}
+
+// Djikstra shortest distance
 func shortestDistance(graph types.Graph, start, end string) (int, []string) {
 	pq := make(pqueue.DistancePQ, len(graph))
 	duration := make(map[string]int)
@@ -178,17 +171,59 @@ func shortestDistance(graph types.Graph, start, end string) (int, []string) {
 	return duration[end], path
 }
 
-func (s State) reset() {
-	for _, each := range s.Package {
-		each.Picked = false
+// Randomly travel the nodes using DFS
+func randomGraphTravel(graph types.Graph, start, end string) []string {
+	visited := make(map[string]bool)
+	stack := [][]string{{start}}
+
+	for len(stack) > 0 {
+		path := stack[len(stack)-1]
+		stack = stack[:len(stack)-1]
+
+		curr := path[len(path)-1]
+		if curr == end {
+			return path
+		}
+
+		if !visited[curr] {
+			visited[curr] = true
+
+			neighbor := make([]string, 0)
+			for each := range graph[curr] {
+				neighbor = append(neighbor, each)
+			}
+			// Shuffle the neighbour sequence for the randomness
+			if len(neighbor) > 0 {
+				rand.Shuffle(len(neighbor), func(i, j int) {
+					neighbor[i], neighbor[j] = neighbor[j], neighbor[i]
+				})
+
+				for _, n := range neighbor {
+					if !visited[n] {
+						newPath := make([]string, len(path))
+						copy(newPath, path)
+						newPath = append(newPath, n)
+						stack = append(stack, newPath)
+					}
+				}
+			}
+		}
 	}
-	for _, each := range s.Train {
-		each.CurrentLocation = each.StartAt
-		each.PickedPackage = make(map[int][]string)
-		each.DroppedPackage = make(map[int][]string)
-	}
+	// No path
+	return nil
 }
 
+// Get random neighbor node
+func getRandomNeighborNode(graph types.Graph, currNode string) string {
+	neighbor := make([]string, 0, len(graph[currNode]))
+	for n := range graph[currNode] {
+		neighbor = append(neighbor, n)
+	}
+	nName := neighbor[rand.Intn(len(neighbor))]
+	return nName
+}
+
+// Package assignment
 func assignPkgToTrain(graph types.Graph, train map[string]*types.Train, pkg map[string]*types.Package) map[string][]string {
 	trainKey := make([]string, 0, len(train))
 	// Generate key
@@ -224,9 +259,12 @@ func assignPkgToTrain(graph types.Graph, train map[string]*types.Train, pkg map[
 	return trainAssgn
 }
 
-func planRoute(graph types.Graph, assignment map[string][]string, train map[string]*types.Train, pkg map[string]*types.Package) map[string][]string {
+// Create route for train to deliver assigned package
+func planRoute(graph types.Graph, assignment map[string][]string, train map[string]*types.Train, pkg map[string]*types.Package) (map[string][]string, []Move) {
 	route := make(map[string][]string)
 	nodeToPkgMap := make(map[string][]string)
+	move := make([]Move, 0)
+	timeTaken := 0
 
 	for _, each := range pkg {
 		if _, ok := nodeToPkgMap[each.StartAt]; !ok {
@@ -237,31 +275,38 @@ func planRoute(graph types.Graph, assignment map[string][]string, train map[stri
 
 	for t, pkgs := range assignment {
 		// pickedUp stack to use as stack of delivery job
-		pickedUp := make([]string, 0)
-		dropped := make([]string, 0)
+		train[t].PickedPackage = make([]string, 0)
+		train[t].DroppedPackage = make([]string, 0)
+
+		// The pkg loop here basically generate route for picking up a pkg and drop the package one at a time
 		for _, name := range pkgs {
 			// Skip if package had been picked up by previous route where the train might passed through the node.
 			if pkg[name].Picked {
 				continue
 			}
 
-			_, pickUpPath := shortestDistance(graph, train[t].CurrentLocation, pkg[name].StartAt)
-			// Remove deplicate start point where it is previous route's destination
-			if len(route[t]) > 0 {
-				pickUpPath = pickUpPath[1:]
-			}
+			pickUpPath := randomGraphTravel(graph, train[t].CurrentLocation, pkg[name].StartAt)
 
 			// Pickup
-			for i := 0; i < len(pickUpPath); i++ {
-				train[t].PickedPackage[len(route[t])+i] = pickedUp
-				train[t].DroppedPackage[len(route[t])+i] = dropped
+			for i := 0; i < len(pickUpPath)-1; i++ {
+				m := Move{
+					TimeTaken:      timeTaken,
+					Train:          train[t].Name,
+					StartNode:      pickUpPath[i],
+					EndNode:        pickUpPath[i+1],
+					PickedPackage:  train[t].PickedPackage,
+					DroppedPackage: train[t].DroppedPackage,
+				}
+				move = append(move, m)
+				timeTaken += graph[pickUpPath[i]][pickUpPath[i+1]]
 
 				// Check if the path passing thru some other package that assigned to the train, might as well pick up.
-				pkgEncounterInThePath := commonStrings(pkgs, nodeToPkgMap[pickUpPath[i]])
-				for _, p := range pkgEncounterInThePath {
-					pkg[p].Picked = true
-					pickedUp = append(pickedUp, p)
-					train[t].PickedPackage[len(route[t])+i] = pickedUp
+				pkgEncounterInThePath := commonStrings(pkgs, nodeToPkgMap[pickUpPath[i+1]])
+				for _, each := range pkgEncounterInThePath {
+					if !pkg[each].Picked {
+						pkg[each].Picked = true
+						train[t].PickedPackage = append(train[t].PickedPackage, each)
+					}
 				}
 			}
 
@@ -270,54 +315,50 @@ func planRoute(graph types.Graph, assignment map[string][]string, train map[stri
 			train[t].CurrentLocation = pkg[name].StartAt
 
 			// Drop off the packages
-			for len(pickedUp) > 0 {
-				p := pickedUp[len(pickedUp)-1]
-				pickedUp = pickedUp[:len(pickedUp)-1]
+			for len(train[t].PickedPackage) > 0 {
+				p := train[t].PickedPackage[len(train[t].PickedPackage)-1]
+				dropOffPath := randomGraphTravel(graph, train[t].CurrentLocation, pkg[p].Destination)
 
-				_, dropOffPath := shortestDistance(graph, train[t].CurrentLocation, pkg[p].Destination)
-				// Remove deplicate start point where it is previous route's destination
-				if len(route[t]) > 0 {
-					dropOffPath = dropOffPath[1:]
-				}
+				for i := 0; i < len(dropOffPath)-1; i++ {
+					m := Move{
+						TimeTaken:      timeTaken,
+						Train:          train[t].Name,
+						StartNode:      dropOffPath[i],
+						EndNode:        dropOffPath[i+1],
+						PickedPackage:  train[t].PickedPackage,
+						DroppedPackage: train[t].DroppedPackage,
+					}
+					move = append(move, m)
+					timeTaken += graph[dropOffPath[i]][dropOffPath[i+1]]
 
-				for i := 0; i < len(dropOffPath); i++ {
-					train[t].PickedPackage[len(route[t])+i] = pickedUp
-					train[t].DroppedPackage[len(route[t])+i] = dropped
 					// Check if the path passing thru some other package that assigned to the train, might as well pick up.
-					pkgEncounterInThePath := commonStrings(pkgs, nodeToPkgMap[dropOffPath[i]])
+					pkgEncounterInThePath := commonStrings(pkgs, nodeToPkgMap[dropOffPath[i+1]])
 					for _, each := range pkgEncounterInThePath {
 						if !pkg[each].Picked {
 							pkg[each].Picked = true
-							pickedUp = append(pickedUp, each)
-							train[t].PickedPackage[len(route[t])+i] = pickedUp
+							train[t].PickedPackage = append(train[t].PickedPackage, each)
 						}
 					}
 
 					// Check if passing thru some node which is destination of some picked up package
-					for j := len(pickedUp) - 1; j >= 0; j-- {
-						if pkg[pickedUp[j]].Destination == dropOffPath[i] {
+					for j := len(train[t].PickedPackage) - 1; j >= 0; j-- {
+						if pkg[train[t].PickedPackage[j]].Destination == dropOffPath[i+1] {
 							// Remove from the pickup queue, we don't have to deliver later, as we can drop off now
-							train[t].CurrentCapacity += pkg[pickedUp[j]].Weight
-							dropped = append(dropped, pickedUp[j])
-							pickedUp = append(pickedUp[:j], pickedUp[j+1:]...)
-							train[t].PickedPackage[len(route[t])+i] = pickedUp
-							train[t].DroppedPackage[len(route[t])+i] = dropped
+							train[t].CurrentCapacity += pkg[train[t].PickedPackage[j]].Weight
+							train[t].DroppedPackage = append(train[t].DroppedPackage, train[t].PickedPackage[j])
+							train[t].PickedPackage = append(train[t].PickedPackage[:j], train[t].PickedPackage[j+1:]...)
 						}
 					}
 				}
 
-				// Drop off the main package that this route is intended
-				dropped = append(dropped, p)
-				train[t].DroppedPackage[len(route[t])+len(dropOffPath)-1] = dropped
-				route[t] = append(route[t], dropOffPath...)
-
 				// Update train current location to picked up destination
+				route[t] = append(route[t], dropOffPath...)
 				train[t].CurrentLocation = pkg[p].Destination
 				train[t].CurrentCapacity += pkg[p].Weight
 			}
 		}
 	}
-	return route
+	return route, move
 }
 
 func commonStrings(arr1, arr2 []string) []string {

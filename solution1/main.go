@@ -49,6 +49,7 @@ func main() {
 	i := 0
 	for _, each := range assignment {
 		a[i] = each
+		i++
 	}
 	queue = append(queue, a)
 
@@ -85,6 +86,7 @@ func main() {
 	movement.Print()
 }
 
+// Djikstra shortest distance
 func shortest(graph types.Graph, start, end string) (int, []string) {
 	pq := make(pqueue.DistancePQ, len(graph))
 	duration := make(map[string]int)
@@ -147,11 +149,11 @@ func assignPackage(pkg map[string]*types.Package, train map[string]*types.Train,
 				// If there's only one train, just go with the closest package at the time.
 				// The default will be just using inverse of distance as the priority, the furthers the lower priority.
 				// Use inverse here because the priority queue is a max heap.
-				priority := float32(1 / (dist + 1))
+				priority := float32(1 / float32((dist + 1)))
 				if len(train) > 1 {
 					// If there's more than one train, we cannot just prioritize distance, there might be some large package in the far where only particular
 					// train able to carry. If prioritze shorter package, the train will get occupied with some lighter.
-					// So here a ratio is being used for heuristic method to handle this, where heavier and further package will be prioritize.
+					// So here a ratio is being used for heuristic method to handle this, where heavier package in short distance will be prioritize
 					priority = float32(p.Weight) / float32((1 + dist))
 				}
 				heap.Push(&pq, &pqueue.Assignment{
@@ -181,6 +183,7 @@ func assignPackage(pkg map[string]*types.Package, train map[string]*types.Train,
 	return assignment
 }
 
+// Picking up package
 func pickupPkg(train *types.Train, pkg *types.Package, graph types.Graph, path []string, timeTaken *int) []Move {
 	movement := make([]Move, 0)
 	// if package and train in the same location
@@ -221,6 +224,7 @@ func pickupPkg(train *types.Train, pkg *types.Package, graph types.Graph, path [
 	return movement
 }
 
+// Dropping off package
 func dropOffPackage(train *types.Train, pkg *types.Package, graph types.Graph, path []string, timeTaken *int) []Move {
 	movement := make([]Move, 0)
 	for i := 0; i < len(path)-1; i++ {

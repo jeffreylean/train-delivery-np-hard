@@ -5,8 +5,8 @@ type Train struct {
 	CurrentLocation string
 	Name            string
 	CurrentCapacity int
-	PickedPackage   map[int][]string
-	DroppedPackage  map[int][]string
+	PickedPackage   []string
+	DroppedPackage  []string
 	StartAt         string
 }
 
